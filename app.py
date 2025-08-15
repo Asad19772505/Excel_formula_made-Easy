@@ -2,6 +2,7 @@ import io
 from datetime import datetime
 from typing import Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -24,7 +25,6 @@ def load_workbook(file_bytes: bytes) -> Dict[str, pd.DataFrame]:
     for name in xls.sheet_names:
         try:
             df = pd.read_excel(xls, sheet_name=name)
-            # Normalize column names
             df.columns = [str(c).strip() for c in df.columns]
             sheets[name] = df
         except Exception:
@@ -39,10 +39,8 @@ def df_multifilter(
     search_term: str
 ) -> pd.DataFrame:
     out = df.copy()
-    # Category filter
     if category_col and category_col in out.columns and category_values:
         out = out[out[category_col].isin(category_values)]
-    # Text search across multiple columns
     if search_term:
         mask = pd.Series(False, index=out.index)
         for col in search_cols:
@@ -55,10 +53,8 @@ def to_excel_bytes(dfs: Dict[str, pd.DataFrame]) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         for sheet_name, df in dfs.items():
-            # Excel sheet name limit 31 chars
             safe_name = sheet_name[:31] if sheet_name else "Sheet"
             df.to_excel(writer, index=False, sheet_name=safe_name)
-            # Autofit
             ws = writer.sheets[safe_name]
             for idx, col in enumerate(df.columns):
                 width = max(10, min(60, int(df[col].astype(str).str.len().quantile(0.9)) + 4))
@@ -66,7 +62,6 @@ def to_excel_bytes(dfs: Dict[str, pd.DataFrame]) -> bytes:
     return buf.getvalue()
 
 def to_pdf_bytes(title: str, sections: Dict[str, pd.DataFrame]) -> bytes:
-    # Lightweight PDF export using reportlab (summary style)
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
     from reportlab.lib.units import cm
@@ -89,11 +84,9 @@ def to_pdf_bytes(title: str, sections: Dict[str, pd.DataFrame]) -> bytes:
         c.drawString(2*cm, y, section)
         y -= 0.5*cm
 
-        # Render first ~20 rows with 3-5 columns best effort
         c.setFont("Helvetica", 8)
         if not df.empty:
             cols = list(df.columns)[:5]
-            # Column headers
             x = 2*cm
             for col in cols:
                 c.drawString(x, y, str(col)[:28])
@@ -142,11 +135,78 @@ def chip(text: str):
         unsafe_allow_html=True
     )
 
+# ---------- Formula Playground helpers ----------
+def structured_ref(table: str, col: str) -> str:
+    return f"{table}[{col}]"
+
+def structured_ref_multi(table: str, cols: List[str]) -> str:
+    inner = "],[".join(cols)
+    return f"{table}[[{inner}]]"
+
+def excel_literal(val):
+    # Quote text for Excel, leave numerics unquoted
+    try:
+        if val is None:
+            return '""'
+        if isinstance(val, bool):
+            return "TRUE" if val else "FALSE"
+        f = float(val)
+        if np.isfinite(f):
+            return str(val)
+    except Exception:
+        pass
+    s = str(val)
+    s = s.replace('"', '""')
+    return f'"{s}"'
+
+def excel_criteria(op: str, value):
+    lit = excel_literal(value)
+    if op == "equals":
+        return lit
+    if op == "not equals":
+        return f"<>{lit.strip('\"')}" if lit.startswith('"') else f"<> {lit}"
+    if op == "contains":
+        # "*text*"
+        if lit.startswith('"') and lit.endswith('"'):
+            return f'"*{lit[1:-1]}*"'
+        return f'"*{lit}*"'
+    if op in {">", ">=", "<", "<="}:
+        return f'"{op}"&{lit}'
+    return lit  # fallback
+
+@st.cache_data(show_spinner=False)
+def load_user_dataset(file) -> pd.DataFrame:
+    name = file.name.lower()
+    if name.endswith(".csv"):
+        return pd.read_csv(file)
+    elif name.endswith((".xlsx", ".xlsm", ".xls")):
+        return pd.read_excel(file)
+    else:
+        raise ValueError("Unsupported file type. Upload CSV or Excel.")
+
+def sample_data() -> pd.DataFrame:
+    np.random.seed(1)
+    n = 50
+    seg = np.random.choice(["Retail","Gov","SMB"], size=n)
+    prod = np.random.choice(["Alpha","Beta","Gamma"], size=n)
+    country = np.random.choice(["KSA","UAE","EGY"], size=n)
+    units = np.random.randint(1, 200, size=n)
+    price = np.random.uniform(5, 50, size=n).round(2)
+    sales = (units * price).round(2)
+    return pd.DataFrame({
+        "Segment": seg,
+        "Product": prod,
+        "Country": country,
+        "Units": units,
+        "Price": price,
+        "Sales": sales
+    })
+
 # ---------------------------
 # UI: Sidebar
 # ---------------------------
 st.title("🧮 Excel Formula Companion")
-st.caption("Search • Filter • Compare • Learn • Export")
+st.caption("Search • Filter • Compare • Learn • Export • **Playground**")
 
 with st.sidebar:
     st.header("Step 1 — Upload Master Workbook")
@@ -164,7 +224,7 @@ with st.sidebar:
     selected_functions = []
 
 # ---------------------------
-# Load Data
+# Load Master Data
 # ---------------------------
 if not uploaded:
     st.info("Upload your **Excel_Formulas_Master_Reference_With_Filters.xlsx** to begin.")
@@ -172,7 +232,6 @@ if not uploaded:
 
 sheets = load_workbook(uploaded.read())
 
-# Expected sheet names (from your file)
 FULL_REF = "Full Reference"
 FORM_LIST = "Formulas (List)"
 CAT_INDEX = "Category Index"
@@ -189,7 +248,6 @@ quick = sheets.get(QUICK, pd.DataFrame())
 controls = sheets.get(CONTROLS, pd.DataFrame())
 filtered_view = sheets.get(FILTERED, pd.DataFrame())
 
-# Derive category/function options from Full Reference (fallback to Formulas List)
 if not full_ref.empty:
     categories = sorted([c for c in full_ref.get("Category", pd.Series()).dropna().unique()])
     functions = sorted([c for c in full_ref.get("Function", pd.Series()).dropna().unique()])
@@ -204,7 +262,7 @@ with st.sidebar:
         selected_functions = st.multiselect("Filter by Function", functions, default=[])
 
 # ---------------------------
-# Tabs
+# Tabs (added Playground)
 # ---------------------------
 tabs = st.tabs([
     "Full Reference",
@@ -213,7 +271,8 @@ tabs = st.tabs([
     "Category Comparisons",
     "Quick Examples",
     "Flashcards",
-    "Exports"
+    "Exports",
+    "Formula Playground"  # NEW
 ])
 
 # ---------------------------
@@ -225,8 +284,6 @@ with tabs[0]:
         st.warning("No data found in 'Full Reference'.")
     else:
         base_df = full_ref.copy()
-
-        # Apply filters
         df = df_multifilter(
             base_df,
             category_col="Category" if "Category" in base_df.columns else None,
@@ -240,7 +297,6 @@ with tabs[0]:
         st.caption(f"{len(df):,} of {len(base_df):,} rows")
         st.dataframe(df, use_container_width=True)
 
-        # Quick details panel
         st.markdown("#### Details")
         detail_col1, detail_col2 = st.columns([1, 1])
         with detail_col1:
@@ -258,7 +314,6 @@ with tabs[0]:
                 st.write("**Example Formula (copy/paste):**")
                 st.code(str(row.get("Example Formula (copy/paste)", "")))
                 st.write("**Hints:**", row.get("Hints", "—"))
-                # Chips
                 chip(row.get("Category", ""))
                 chip(pick)
 
@@ -271,7 +326,6 @@ with tabs[1]:
         st.warning("No data found in 'Filtered View' (using Full Reference instead).")
         df_base = full_ref.copy()
     else:
-        # If your workbook drives this view, still allow global filters
         df_base = (filtered_view if not filtered_view.empty else full_ref).copy()
 
     df_f = df_multifilter(
@@ -296,8 +350,6 @@ with tabs[2]:
         st.info("No data in 'Usage Cheat-Sheet'.")
     else:
         st.dataframe(cheats, use_container_width=True)
-
-        # Friendly expanders by topic if columns exist
         topic_col = "Comparison / Topic"
         guide_col = "Usage Guidance"
         if topic_col in cheats.columns and guide_col in cheats.columns:
@@ -328,7 +380,6 @@ with tabs[4]:
         st.info("No data in 'Quick Examples'.")
     else:
         st.dataframe(quick, use_container_width=True)
-        # Optional: per-function quick example lookup
         fn_col = "Function" if "Function" in quick.columns else None
         if fn_col:
             pick2 = st.selectbox("Show example for function", sorted(quick[fn_col].dropna().unique()))
@@ -336,7 +387,7 @@ with tabs[4]:
             st.write(ex_df)
 
 # ---------------------------
-# Flashcards (Learning Mode)
+# Flashcards (Learning Mode) — FIXED
 # ---------------------------
 with tabs[5]:
     st.subheader("Flashcards (Learning Mode)")
@@ -356,7 +407,14 @@ with tabs[5]:
         if pool.empty:
             st.info("No rows match your current filters.")
         else:
-            idx = st.slider("Flashcard index", 1, len(pool), 1, key="flash_idx")
+            n = len(pool)
+            if n == 1:
+                st.info("Only 1 flashcard available with current filters.")
+                idx = 1
+            else:
+                # Safe slider: min < max
+                default_val = 1 if "flash_idx" not in st.session_state else min(st.session_state.get("flash_idx", 1), n)
+                idx = st.slider("Flashcard index", min_value=1, max_value=n, value=default_val, key="flash_idx")
             row = pool.iloc[idx-1].to_dict()
             st.markdown(f"### {row.get('Function', 'Function')}")
             st.write("**Category:**", row.get("Category", "—"))
@@ -375,10 +433,8 @@ with tabs[6]:
     st.subheader("Exports")
     st.caption("Export your current, filtered views.")
 
-    # Build exportable slices
     export_slices = {}
 
-    # Full Reference (filtered the same way as tab 1)
     if not full_ref.empty:
         df1 = df_multifilter(
             full_ref,
@@ -410,7 +466,6 @@ with tabs[6]:
     if not quick.empty:
         export_slices["Quick Examples"] = quick
 
-    # Excel export
     excel_bytes = to_excel_bytes(export_slices)
     st.download_button(
         label="⬇️ Download Excel (.xlsx)",
@@ -419,7 +474,6 @@ with tabs[6]:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # PDF export (summary)
     try:
         pdf_bytes = to_pdf_bytes(
             "Excel Formula Companion — Export",
@@ -434,5 +488,234 @@ with tabs[6]:
     except Exception as e:
         st.warning(f"PDF export requires 'reportlab'. If missing, add to requirements. ({e})")
 
-st.markdown("---")
-st.caption("© Your Team • Built for speed and clarity • Streamlit")
+# ---------------------------
+# Formula Playground — NEW
+# ---------------------------
+with tabs[7]:
+    st.subheader("Formula Playground")
+    st.caption("Evaluate common Excel functions on a dataset and get **copy-ready Excel formulas**.")
+
+    left, right = st.columns([2, 1])
+    with left:
+        data_file = st.file_uploader("Upload a dataset (CSV or Excel)", type=["csv", "xlsx", "xlsm", "xls"], key="play_data")
+        if data_file:
+            df_data = load_user_dataset(data_file)
+        else:
+            st.info("No dataset uploaded. Using a small sample dataset.")
+            df_data = sample_data()
+        st.dataframe(df_data.head(20), use_container_width=True, height=350)
+    with right:
+        table_name = st.text_input("Excel Table name (for formula output)", value="Data")
+        func = st.selectbox(
+            "Function",
+            [
+                "SUM", "AVERAGE", "COUNT",
+                "SUMIF", "COUNTIF", "SUMIFS", "AVERAGEIF",
+                "XLOOKUP", "INDEX+MATCH",
+                "FILTER", "UNIQUE", "TEXTJOIN"
+            ],
+            index=0
+        )
+
+    cols = list(df_data.columns)
+
+    # ---- Scalar helpers for UI
+    def choose_numeric(label="Numeric column"):
+        num_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df_data[c])]
+        return st.selectbox(label, num_cols) if num_cols else st.selectbox(label, cols)
+
+    def choose_text(label="Text column"):
+        txt_cols = [c for c in cols if pd.api.types.is_string_dtype(df_data[c])]
+        return st.selectbox(label, txt_cols) if txt_cols else st.selectbox(label, cols)
+
+    def pick_op(label="Operator", include_contains=True):
+        ops = [ "equals", "not equals", ">", ">=", "<", "<=" ]
+        if include_contains:
+            ops = ["equals", "contains", "not equals", ">", ">=", "<", "<="]
+        return st.selectbox(label, ops)
+
+    st.markdown("---")
+
+    result_df = None
+    result_scalar = None
+    excel_formula = ""
+
+    if func == "SUM":
+        target = choose_numeric("Sum column")
+        result_scalar = float(df_data[target].sum())
+        excel_formula = f"=SUM({structured_ref(table_name, target)})"
+
+    elif func == "AVERAGE":
+        target = choose_numeric("Average column")
+        result_scalar = float(df_data[target].mean())
+        excel_formula = f"=AVERAGE({structured_ref(table_name, target)})"
+
+    elif func == "COUNT":
+        target = st.selectbox("Count in column (numbers counted)", cols)
+        # COUNT counts numbers. Show both COUNT and COUNTA to be explicit.
+        count_num = pd.to_numeric(df_data[target], errors="coerce").notna().sum()
+        result_scalar = int(count_num)
+        excel_formula = (
+            f"=COUNT({structured_ref(table_name, target)})  "
+            f"// or use COUNTA for non-empty: =COUNTA({structured_ref(table_name, target)})"
+        )
+
+    elif func == "SUMIF":
+        sum_col = choose_numeric("Sum column")
+        crit_col = st.selectbox("Criteria column", cols)
+        op = pick_op()
+        val = st.text_input("Criteria value")
+        # pandas apply criteria
+        ser = df_data[crit_col]
+        if op == "contains":
+            mask = ser.astype(str).str.contains(str(val), case=False, na=False)
+        elif op == "equals":
+            mask = ser == pd.Series([val]*len(ser), index=ser.index)
+        elif op == "not equals":
+            mask = ser != pd.Series([val]*len(ser), index=ser.index)
+        else:
+            mask = pd.to_numeric(ser, errors="coerce").map(lambda x: eval(f"x {op} float(val)") if pd.notna(x) and str(val) != "" else False)
+        result_scalar = float(df_data.loc[mask, sum_col].sum())
+        excel_formula = f"=SUMIF({structured_ref(table_name, crit_col)}, {excel_criteria(op, val)}, {structured_ref(table_name, sum_col)})"
+
+    elif func == "COUNTIF":
+        crit_col = st.selectbox("Criteria column", cols)
+        op = pick_op()
+        val = st.text_input("Criteria value")
+        ser = df_data[crit_col]
+        if op == "contains":
+            mask = ser.astype(str).str.contains(str(val), case=False, na=False)
+        elif op == "equals":
+            mask = ser == pd.Series([val]*len(ser), index=ser.index)
+        elif op == "not equals":
+            mask = ser != pd.Series([val]*len(ser), index=ser.index)
+        else:
+            mask = pd.to_numeric(ser, errors="coerce").map(lambda x: eval(f"x {op} float(val)") if pd.notna(x) and str(val) != "" else False)
+        result_scalar = int(mask.sum())
+        excel_formula = f"=COUNTIF({structured_ref(table_name, crit_col)}, {excel_criteria(op, val)})"
+
+    elif func == "SUMIFS":
+        sum_col = choose_numeric("Sum column")
+        crit1_col = st.selectbox("Criteria 1 column", cols)
+        op1 = pick_op()
+        val1 = st.text_input("Criteria 1 value")
+        add_second = st.checkbox("Add Criteria 2", value=False)
+        mask1 = (
+            df_data[crit1_col].astype(str).str.contains(str(val1), case=False, na=False)
+            if op1 == "contains"
+            else (
+                df_data[crit1_col] == val1 if op1 == "equals"
+                else (df_data[crit1_col] != val1 if op1 == "not equals"
+                      else pd.to_numeric(df_data[crit1_col], errors="coerce").map(lambda x: eval(f"x {op1} float(val1)") if pd.notna(x) and str(val1) != "" else False))
+            )
+        )
+        mask = mask1
+        excel_formula = f"=SUMIFS({structured_ref(table_name, sum_col)}, {structured_ref(table_name, crit1_col)}, {excel_criteria(op1, val1)}"
+        if add_second:
+            crit2_col = st.selectbox("Criteria 2 column", cols)
+            op2 = pick_op(key="op2")
+            val2 = st.text_input("Criteria 2 value", key="val2")
+            mask2 = (
+                df_data[crit2_col].astype(str).str.contains(str(val2), case=False, na=False)
+                if op2 == "contains"
+                else (
+                    df_data[crit2_col] == val2 if op2 == "equals"
+                    else (df_data[crit2_col] != val2 if op2 == "not equals"
+                          else pd.to_numeric(df_data[crit2_col], errors="coerce").map(lambda x: eval(f"x {op2} float(val2)") if pd.notna(x) and str(val2) != "" else False))
+                )
+            )
+            mask = mask & mask2
+            excel_formula += f", {structured_ref(table_name, crit2_col)}, {excel_criteria(op2, val2)}"
+        excel_formula += ")"
+        result_scalar = float(df_data.loc[mask, sum_col].sum())
+
+    elif func == "AVERAGEIF":
+        avg_col = choose_numeric("Average column")
+        crit_col = st.selectbox("Criteria column", cols)
+        op = pick_op()
+        val = st.text_input("Criteria value")
+        ser = df_data[crit_col]
+        if op == "contains":
+            mask = ser.astype(str).str.contains(str(val), case=False, na=False)
+        elif op == "equals":
+            mask = ser == pd.Series([val]*len(ser), index=ser.index)
+        elif op == "not equals":
+            mask = ser != pd.Series([val]*len(ser), index=ser.index)
+        else:
+            mask = pd.to_numeric(ser, errors="coerce").map(lambda x: eval(f"x {op} float(val)") if pd.notna(x) and str(val) != "" else False)
+        result_scalar = float(df_data.loc[mask, avg_col].mean())
+        excel_formula = f"=AVERAGEIF({structured_ref(table_name, crit_col)}, {excel_criteria(op, val)}, {structured_ref(table_name, avg_col)})"
+
+    elif func == "XLOOKUP":
+        key_col = st.selectbox("Lookup column (search in)", cols)
+        ret_col = st.selectbox("Return column", cols, index=min(1, len(cols)-1))
+        lookup_val = st.text_input("Lookup value")
+        # pandas
+        hit = df_data[df_data[key_col].astype(str) == str(lookup_val)]
+        result_scalar = (None if hit.empty else hit.iloc[0][ret_col])
+        excel_formula = f"=XLOOKUP({excel_literal(lookup_val)}, {structured_ref(table_name, key_col)}, {structured_ref(table_name, ret_col)}, \"Not found\")"
+
+    elif func == "INDEX+MATCH":
+        key_col = st.selectbox("Lookup column (MATCH against)", cols)
+        ret_col = st.selectbox("Return column (INDEX from)", cols, index=min(1, len(cols)-1))
+        lookup_val = st.text_input("Lookup value")
+        hit = df_data[df_data[key_col].astype(str) == str(lookup_val)]
+        result_scalar = (None if hit.empty else hit.iloc[0][ret_col])
+        excel_formula = (
+            f"=INDEX({structured_ref(table_name, ret_col)}, "
+            f"MATCH({excel_literal(lookup_val)}, {structured_ref(table_name, key_col)}, 0))"
+        )
+
+    elif func == "FILTER":
+        ret_cols = st.multiselect("Return columns", cols, default=cols[:1])
+        crit_col = st.selectbox("Filter column", cols)
+        op = pick_op()
+        val = st.text_input("Filter value")
+        ser = df_data[crit_col]
+        if op == "contains":
+            mask = ser.astype(str).str.contains(str(val), case=False, na=False)
+        elif op == "equals":
+            mask = ser == pd.Series([val]*len(ser), index=ser.index)
+        elif op == "not equals":
+            mask = ser != pd.Series([val]*len(ser), index=ser.index)
+        else:
+            mask = pd.to_numeric(ser, errors="coerce").map(lambda x: eval(f"x {op} float(val)") if pd.notna(x) and str(val) != "" else False)
+        result_df = df_data.loc[mask, ret_cols]
+        # Excel formula for multiple columns
+        if len(ret_cols) == 1:
+            ret_ref = structured_ref(table_name, ret_cols[0])
+        else:
+            ret_ref = structured_ref_multi(table_name, ret_cols)
+        excel_formula = f"=FILTER({ret_ref}, {structured_ref(table_name, crit_col)}={excel_criteria(op, val) if op!='contains' else excel_criteria(op, val)})"
+        if op == "contains":
+            excel_formula += "  // Note: Excel FILTER can't natively 'contains' without helper; use SEARCH()>0"
+
+    elif func == "UNIQUE":
+        target = st.selectbox("Column", cols)
+        result_df = pd.DataFrame({target: df_data[target].dropna().astype(str).unique()})
+        excel_formula = f"=UNIQUE({structured_ref(table_name, target)})"
+
+    elif func == "TEXTJOIN":
+        target = st.selectbox("Column", cols)
+        delim = st.text_input("Delimiter", value=", ")
+        ignore_empty = st.checkbox("Ignore empty", value=True)
+        series = df_data[target].astype(str)
+        if ignore_empty:
+            series = series.replace({"": np.nan}).dropna()
+        result_scalar = delim.join(series.astype(str).tolist())
+        excel_formula = f"=TEXTJOIN({excel_literal(delim)}, {excel_literal(ignore_empty)}, {structured_ref(table_name, target)})"
+
+    # ---- Results
+    st.markdown("---")
+    if result_df is not None:
+        st.write("**Result (table):**")
+        st.dataframe(result_df, use_container_width=True)
+    elif result_scalar is not None:
+        st.metric("Result", f"{result_scalar}")
+    else:
+        st.info("Adjust parameters to see results.")
+
+    if excel_formula:
+        st.markdown("**Copy-ready Excel formula:**")
+        st.code(excel_formula)
+ur Team • Built for speed and clarity • Streamlit")
