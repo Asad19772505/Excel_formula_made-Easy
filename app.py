@@ -11,7 +11,7 @@ import streamlit as st
 # ---------------------------
 st.set_page_config(
     page_title="Excel Formula Companion",
-    page_icon="🧮",
+    page_icon=None,
     layout="wide"
 )
 
@@ -74,7 +74,7 @@ def to_pdf_bytes(title: str, sections: Dict[str, pd.DataFrame]) -> bytes:
         c.setFont("Helvetica-Bold", 14)
         c.drawString(2*cm, H-2.0*cm, page_title)
         c.setFont("Helvetica", 9)
-        c.drawString(2*cm, H-2.6*cm, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        c.drawString(2*cm, H-2.6*cm, "Generated: " + datetime.now().strftime("%Y-%m-%d %H:%M"))
 
     y = H - 3.0*cm
     draw_header(title)
@@ -120,7 +120,7 @@ def to_pdf_bytes(title: str, sections: Dict[str, pd.DataFrame]) -> bytes:
 
 def chip(text: str):
     st.markdown(
-        f"""
+        """
         <span style="
             display:inline-block;
             padding:4px 10px;
@@ -129,9 +129,9 @@ def chip(text: str):
             background:#f8fafc;
             font-size:12px;
             margin-right:6px;">
-            {text}
+            {t}
         </span>
-        """,
+        """.format(t=text),
         unsafe_allow_html=True
     )
 
@@ -164,7 +164,12 @@ def excel_criteria(op: str, value):
     if op == "equals":
         return lit
     if op == "not equals":
-        return f"<>{lit.strip('\"')}" if lit.startswith('"') else f"<> {lit}"
+        # Use string literal properly without smart quotes
+        v = lit
+        if v.startswith('"') and v.endswith('"'):
+            inner = v[1:-1]
+            return f'"<>{inner}"'
+        return f'"<>{v}"'
     if op == "contains":
         # "*text*"
         if lit.startswith('"') and lit.endswith('"'):
@@ -172,7 +177,7 @@ def excel_criteria(op: str, value):
         return f'"*{lit}*"'
     if op in {">", ">=", "<", "<="}:
         return f'"{op}"&{lit}'
-    return lit  # fallback
+    return lit
 
 @st.cache_data(show_spinner=False)
 def load_user_dataset(file) -> pd.DataFrame:
@@ -203,13 +208,13 @@ def sample_data() -> pd.DataFrame:
     })
 
 # ---------------------------
-# UI: Sidebar
+# UI
 # ---------------------------
-st.title("🧮 Excel Formula Companion")
-st.caption("Search • Filter • Compare • Learn • Export • **Playground**")
+st.title("Excel Formula Companion")
+st.caption("Search, Filter, Compare, Learn, Export, and Playground")
 
 with st.sidebar:
-    st.header("Step 1 — Upload Master Workbook")
+    st.header("Step 1 - Upload Master Workbook")
     uploaded = st.file_uploader(
         "Upload your Excel master file",
         type=["xlsx", "xlsm", "xls"],
@@ -217,7 +222,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.subheader("Global Search & Filters")
+    st.subheader("Global Search and Filters")
 
     search_term = st.text_input("Search text (function, description, syntax, hints)", "")
     selected_categories = []
@@ -227,7 +232,7 @@ with st.sidebar:
 # Load Master Data
 # ---------------------------
 if not uploaded:
-    st.info("Upload your **Excel_Formulas_Master_Reference_With_Filters.xlsx** to begin.")
+    st.info("Upload your Excel_Formulas_Master_Reference_With_Filters.xlsx to begin.")
     st.stop()
 
 sheets = load_workbook(uploaded.read())
@@ -262,7 +267,7 @@ with st.sidebar:
         selected_functions = st.multiselect("Filter by Function", functions, default=[])
 
 # ---------------------------
-# Tabs (added Playground)
+# Tabs
 # ---------------------------
 tabs = st.tabs([
     "Full Reference",
@@ -272,7 +277,7 @@ tabs = st.tabs([
     "Quick Examples",
     "Flashcards",
     "Exports",
-    "Formula Playground"  # NEW
+    "Formula Playground"
 ])
 
 # ---------------------------
@@ -281,7 +286,7 @@ tabs = st.tabs([
 with tabs[0]:
     st.subheader("Full Reference")
     if full_ref.empty:
-        st.warning("No data found in 'Full Reference'.")
+        st.warning("No data found in Full Reference.")
     else:
         base_df = full_ref.copy()
         df = df_multifilter(
@@ -307,13 +312,13 @@ with tabs[0]:
             sel = df[df["Function"] == pick].head(1)
             if not sel.empty:
                 row = sel.iloc[0].to_dict()
-                st.write("**Category:**", row.get("Category", "—"))
-                st.write("**Short Description:**", row.get("Short Description", "—"))
-                st.write("**Syntax Template:**")
+                st.write("Category:", row.get("Category", ""))
+                st.write("Short Description:", row.get("Short Description", ""))
+                st.write("Syntax Template:")
                 st.code(str(row.get("Syntax Template", "")))
-                st.write("**Example Formula (copy/paste):**")
+                st.write("Example Formula (copy/paste):")
                 st.code(str(row.get("Example Formula (copy/paste)", "")))
-                st.write("**Hints:**", row.get("Hints", "—"))
+                st.write("Hints:", row.get("Hints", ""))
                 chip(row.get("Category", ""))
                 chip(pick)
 
@@ -323,7 +328,7 @@ with tabs[0]:
 with tabs[1]:
     st.subheader("Filtered View")
     if filtered_view.empty and full_ref.empty:
-        st.warning("No data found in 'Filtered View' (using Full Reference instead).")
+        st.warning("No data found in Filtered View (using Full Reference instead).")
         df_base = full_ref.copy()
     else:
         df_base = (filtered_view if not filtered_view.empty else full_ref).copy()
@@ -347,7 +352,7 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("Usage Cheat-Sheet")
     if cheats.empty:
-        st.info("No data in 'Usage Cheat-Sheet'.")
+        st.info("No data in Usage Cheat-Sheet.")
     else:
         st.dataframe(cheats, use_container_width=True)
         topic_col = "Comparison / Topic"
@@ -365,7 +370,7 @@ with tabs[2]:
 with tabs[3]:
     st.subheader("Category Comparisons")
     if cat_index.empty:
-        st.info("No data in 'Category Index'.")
+        st.info("No data in Category Index.")
     else:
         st.dataframe(cat_index, use_container_width=True)
         st.markdown("---")
@@ -377,7 +382,7 @@ with tabs[3]:
 with tabs[4]:
     st.subheader("Quick Examples")
     if quick.empty:
-        st.info("No data in 'Quick Examples'.")
+        st.info("No data in Quick Examples.")
     else:
         st.dataframe(quick, use_container_width=True)
         fn_col = "Function" if "Function" in quick.columns else None
@@ -387,12 +392,12 @@ with tabs[4]:
             st.write(ex_df)
 
 # ---------------------------
-# Flashcards (Learning Mode) — FIXED
+# Flashcards (Learning Mode) - fixed slider
 # ---------------------------
 with tabs[5]:
     st.subheader("Flashcards (Learning Mode)")
     if full_ref.empty:
-        st.info("Need 'Full Reference' to use flashcards.")
+        st.info("Need Full Reference to use flashcards.")
     else:
         pool = df_multifilter(
             full_ref,
@@ -412,19 +417,18 @@ with tabs[5]:
                 st.info("Only 1 flashcard available with current filters.")
                 idx = 1
             else:
-                # Safe slider: min < max
                 default_val = 1 if "flash_idx" not in st.session_state else min(st.session_state.get("flash_idx", 1), n)
                 idx = st.slider("Flashcard index", min_value=1, max_value=n, value=default_val, key="flash_idx")
             row = pool.iloc[idx-1].to_dict()
-            st.markdown(f"### {row.get('Function', 'Function')}")
-            st.write("**Category:**", row.get("Category", "—"))
-            st.write("**Short Description:**", row.get("Short Description", "—"))
+            st.markdown("### " + str(row.get("Function", "Function")))
+            st.write("Category:", row.get("Category", ""))
+            st.write("Short Description:", row.get("Short Description", ""))
             with st.expander("Show Syntax"):
                 st.code(str(row.get("Syntax Template", "")))
             with st.expander("Show Example"):
                 st.code(str(row.get("Example Formula (copy/paste)", "")))
             with st.expander("Hints"):
-                st.write(row.get("Hints", "—"))
+                st.write(row.get("Hints", ""))
 
 # ---------------------------
 # Exports Tab
@@ -468,32 +472,32 @@ with tabs[6]:
 
     excel_bytes = to_excel_bytes(export_slices)
     st.download_button(
-        label="⬇️ Download Excel (.xlsx)",
+        label="Download Excel (.xlsx)",
         data=excel_bytes,
-        file_name=f"Excel_Formula_Companion_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        file_name="Excel_Formula_Companion_" + datetime.now().strftime("%Y%m%d_%H%M") + ".xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
     try:
         pdf_bytes = to_pdf_bytes(
-            "Excel Formula Companion — Export",
+            "Excel Formula Companion - Export",
             export_slices
         )
         st.download_button(
-            label="⬇️ Download PDF (summary)",
+            label="Download PDF (summary)",
             data=pdf_bytes,
-            file_name=f"Excel_Formula_Companion_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+            file_name="Excel_Formula_Companion_" + datetime.now().strftime("%Y%m%d_%H%M") + ".pdf",
             mime="application/pdf"
         )
     except Exception as e:
-        st.warning(f"PDF export requires 'reportlab'. If missing, add to requirements. ({e})")
+        st.warning("PDF export requires reportlab. If missing, add to requirements. (" + str(e) + ")")
 
 # ---------------------------
-# Formula Playground — NEW
+# Formula Playground
 # ---------------------------
 with tabs[7]:
     st.subheader("Formula Playground")
-    st.caption("Evaluate common Excel functions on a dataset and get **copy-ready Excel formulas**.")
+    st.caption("Evaluate common Excel functions on a dataset and get copy-ready Excel formulas.")
 
     left, right = st.columns([2, 1])
     with left:
@@ -519,22 +523,15 @@ with tabs[7]:
 
     cols = list(df_data.columns)
 
-    # ---- Scalar helpers for UI
     def choose_numeric(label="Numeric column"):
         num_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df_data[c])]
         return st.selectbox(label, num_cols) if num_cols else st.selectbox(label, cols)
 
-    def choose_text(label="Text column"):
-        txt_cols = [c for c in cols if pd.api.types.is_string_dtype(df_data[c])]
-        return st.selectbox(label, txt_cols) if txt_cols else st.selectbox(label, cols)
-
-    def pick_op(label="Operator", include_contains=True):
-        ops = [ "equals", "not equals", ">", ">=", "<", "<=" ]
+    def pick_op(label="Operator", include_contains=True, key=None):
+        ops = ["equals", "not equals", ">", ">=", "<", "<="]
         if include_contains:
             ops = ["equals", "contains", "not equals", ">", ">=", "<", "<="]
-        return st.selectbox(label, ops)
-
-    st.markdown("---")
+        return st.selectbox(label, ops, key=key)
 
     result_df = None
     result_scalar = None
@@ -552,7 +549,6 @@ with tabs[7]:
 
     elif func == "COUNT":
         target = st.selectbox("Count in column (numbers counted)", cols)
-        # COUNT counts numbers. Show both COUNT and COUNTA to be explicit.
         count_num = pd.to_numeric(df_data[target], errors="coerce").notna().sum()
         result_scalar = int(count_num)
         excel_formula = (
@@ -565,7 +561,6 @@ with tabs[7]:
         crit_col = st.selectbox("Criteria column", cols)
         op = pick_op()
         val = st.text_input("Criteria value")
-        # pandas apply criteria
         ser = df_data[crit_col]
         if op == "contains":
             mask = ser.astype(str).str.contains(str(val), case=False, na=False)
@@ -650,7 +645,6 @@ with tabs[7]:
         key_col = st.selectbox("Lookup column (search in)", cols)
         ret_col = st.selectbox("Return column", cols, index=min(1, len(cols)-1))
         lookup_val = st.text_input("Lookup value")
-        # pandas
         hit = df_data[df_data[key_col].astype(str) == str(lookup_val)]
         result_scalar = (None if hit.empty else hit.iloc[0][ret_col])
         excel_formula = f"=XLOOKUP({excel_literal(lookup_val)}, {structured_ref(table_name, key_col)}, {structured_ref(table_name, ret_col)}, \"Not found\")"
@@ -681,14 +675,13 @@ with tabs[7]:
         else:
             mask = pd.to_numeric(ser, errors="coerce").map(lambda x: eval(f"x {op} float(val)") if pd.notna(x) and str(val) != "" else False)
         result_df = df_data.loc[mask, ret_cols]
-        # Excel formula for multiple columns
         if len(ret_cols) == 1:
             ret_ref = structured_ref(table_name, ret_cols[0])
         else:
             ret_ref = structured_ref_multi(table_name, ret_cols)
         excel_formula = f"=FILTER({ret_ref}, {structured_ref(table_name, crit_col)}={excel_criteria(op, val) if op!='contains' else excel_criteria(op, val)})"
         if op == "contains":
-            excel_formula += "  // Note: Excel FILTER can't natively 'contains' without helper; use SEARCH()>0"
+            excel_formula += "  // Note: Excel FILTER cannot natively do contains without helper. Consider SEARCH()>0."
 
     elif func == "UNIQUE":
         target = st.selectbox("Column", cols)
@@ -705,10 +698,9 @@ with tabs[7]:
         result_scalar = delim.join(series.astype(str).tolist())
         excel_formula = f"=TEXTJOIN({excel_literal(delim)}, {excel_literal(ignore_empty)}, {structured_ref(table_name, target)})"
 
-    # ---- Results
     st.markdown("---")
     if result_df is not None:
-        st.write("**Result (table):**")
+        st.write("Result (table):")
         st.dataframe(result_df, use_container_width=True)
     elif result_scalar is not None:
         st.metric("Result", f"{result_scalar}")
@@ -716,6 +708,9 @@ with tabs[7]:
         st.info("Adjust parameters to see results.")
 
     if excel_formula:
-        st.markdown("**Copy-ready Excel formula:**")
+        st.markdown("Copy-ready Excel formula:")
         st.code(excel_formula)
-ur Team • Built for speed and clarity • Streamlit")
+
+# ---------- Footer (ASCII-only) ----------
+st.markdown("---")
+st.caption("(c) Your Team - Built for speed and clarity - Powered by Streamlit")
